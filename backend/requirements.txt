@@ -1,6 +1,6 @@
 fastapi
 uvicorn[standard]
-torch
+faster-whisper
 transformers>=4.38.0
 accelerate
 soundfile

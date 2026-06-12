@@ -308,7 +308,7 @@ function App() {
         )}
       </div>
       <div className="footer-info">
-        Khmer ASR Powered by Whisper Large v3
+        Khmer ASR Powered by Whisper Large v3 (Optimized High-Accuracy CPU Engine)
       </div>
     </div>
   );

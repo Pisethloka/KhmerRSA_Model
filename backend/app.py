@@ -1,20 +1,20 @@
 import os
+import gc
 import re
 import uuid
-import tempfile
 import shutil
+import tempfile
 import subprocess
 import unicodedata
-import torch
 import librosa
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
+from faster_whisper import WhisperModel
 
 app = FastAPI(
     title="Khmer Automatic Speech Recognition (ASR) API",
-    description="ASR using metythorn/whisper-large-v3",
+    description="ASR using metythorn/whisper-large-v3 with CTranslate2 backend",
     version="1.0.0"
 )
 
@@ -27,40 +27,106 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Model loading (once at startup)
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-torch_dtype = torch.float16 if DEVICE == "cuda" else torch.float32
-print(f"Loading Whisper model on {DEVICE} in {torch_dtype}...")
+# Pre-compile regex patterns at the module level for performance
+FORMATTING_CHARS_PATTERN = re.compile(r'[\u200b\u200c\u200d\u200e\u200f]+')
+KHMER_SPACE_SANDWICH_PATTERN = re.compile(r'(?<=[\u1780-\u17FF\u19E0-\u19FF])\s+(?=[\u1780-\u17FF\u19E0-\u19FF])')
 
-try:
-    processor = WhisperProcessor.from_pretrained("metythorn/whisper-large-v3")
-    model = WhisperForConditionalGeneration.from_pretrained(
-        "metythorn/whisper-large-v3",
-        torch_dtype=torch_dtype
-    ).to(DEVICE)
-    model.eval()
-    print("ASR model loaded and set to eval mode.")
-except Exception as e:
-    print(f"Error loading model: {e}")
-    processor = None
-    model = None
+# Phonetic slip correction dictionary
+PHONETIC_SLIP_DICT = {
+    "ច្រឹសរ": "ជ្រើសរើស",
+}
+
+# Optimized CPU INT8 configuration
+DEVICE = "cpu"
+COMPUTE_TYPE = "int8"
+LOCAL_CT2_PATH = "./metythorn_whisper_large_v3_ct2"
+
+model = None
+
+def initialize_model():
+    """
+    Startup model initialization: checks for local CTranslate2 directory first,
+    falling back to cache loading or conversion from Hugging Face format.
+    """
+    global model
+    
+    # Check if local CTranslate2 directory exists
+    if os.path.exists(LOCAL_CT2_PATH):
+        print(f"Loading local CTranslate2 model from '{LOCAL_CT2_PATH}'...")
+        try:
+            model = WhisperModel(LOCAL_CT2_PATH, device=DEVICE, compute_type=COMPUTE_TYPE)
+            print("Local CTranslate2 model loaded successfully.")
+        except Exception as e:
+            print(f"Failed to load local model: {e}")
+            model = None
+            
+    if model is None:
+        print("Falling back to loading 'metythorn/whisper-large-v3' directly via Hugging Face cache...")
+        try:
+            # Fallback direct load
+            model = WhisperModel("metythorn/whisper-large-v3", device=DEVICE, compute_type=COMPUTE_TYPE)
+            print("Model loaded from Hugging Face cache successfully.")
+        except Exception as e:
+            print(f"Failed to load directly from Hugging Face: {e}")
+            print("Attempting to convert PyTorch model from Hugging Face to CTranslate2...")
+            try:
+                from ctranslate2.converters import TransformersConverter
+                converter = TransformersConverter(
+                    model_name_or_path="metythorn/whisper-large-v3",
+                    copy_files=["tokenizer.json", "preprocessor_config.json"]
+                )
+                converter.convert(output_dir=LOCAL_CT2_PATH, quantization=COMPUTE_TYPE, force=True)
+                model = WhisperModel(LOCAL_CT2_PATH, device=DEVICE, compute_type=COMPUTE_TYPE)
+                print("Model converted and loaded successfully.")
+            except Exception as conv_err:
+                print(f"Conversion/load failed: {conv_err}")
+                model = None
+
+# Initialize Whisper model
+initialize_model()
+
+def clean_and_normalize_khmer_text(text: str) -> str:
+    """
+    Linguistic post-processing module to ensure clean and continuous Khmer text
+    while preserving spacing around non-Khmer words.
+    """
+    # Step A: Unconditionally strip hidden formatting characters
+    text = FORMATTING_CHARS_PATTERN.sub("", text)
+    
+    # Step B: Strip spaces ONLY when tightly sandwiched between Khmer characters
+    text = KHMER_SPACE_SANDWICH_PATTERN.sub("", text)
+    
+    # Step C: Phonetic slip dictionary mapping
+    for slip, correction in PHONETIC_SLIP_DICT.items():
+        text = text.replace(slip, correction)
+        
+    # Step D: Apply NFC Unicode normalization and strip leading/trailing whitespace
+    return unicodedata.normalize("NFC", text).strip()
 
 @app.get("/health")
 def health():
+    """
+    Health check endpoint exposing model state and configuration details.
+    """
     return {
         "status": "ok" if model is not None else "error",
-        "device": DEVICE
+        "device": DEVICE,
+        "compute_type": COMPUTE_TYPE
     }
 
 @app.post("/transcribe")
 async def transcribe(
     file: UploadFile = File(...),
-    initial_prompt: str = Form(None)
+    initial_prompt: str = Form("ការសន្ទនាជាភាសាខ្មែរ។")
 ):
-    if model is None or processor is None:
+    """
+    ASR transcription endpoint implementing signal enhancement, maximum precision decoding,
+    strict post-processing, and aggressive resource cleanup.
+    """
+    if model is None:
         raise HTTPException(status_code=500, detail="ASR Model is not loaded on the backend")
 
-    # Audio preprocessing
+    # Generate unique paths for temporary files
     input_suffix = os.path.splitext(file.filename)[1] if file.filename else ".tmp"
     if not input_suffix:
         input_suffix = ".tmp"
@@ -71,11 +137,11 @@ async def transcribe(
     output_wav_path = os.path.join(temp_dir, f"output_{unique_id}.wav")
 
     try:
-        # Save the uploaded file to input_path
+        # Write the uploaded file to disk
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # Convert using FFmpeg with filters: anlmdn, loudnorm
+        # Transcode audio using FFmpeg with target signal enhancement filters (16kHz mono PCM)
         command = [
             "ffmpeg", "-y",
             "-i", input_path,
@@ -86,64 +152,60 @@ async def transcribe(
             output_wav_path
         ]
 
-        result = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+        try:
+            subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"FFmpeg failed with exit code {e.returncode}")
+            print(f"FFmpeg stdout: {e.stdout}")
+            print(f"FFmpeg stderr: {e.stderr}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Audio transcoding failed: {e.stderr.strip()}"
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=500,
+                detail="FFmpeg executable not found on the system path."
+            )
 
-        # Assert output file exists and has non-zero size
+        # Confirm transcoded file was created and is not empty
         if not os.path.exists(output_wav_path) or os.path.getsize(output_wav_path) == 0:
-            print(f"FFmpeg stdout: {result.stdout}")
-            print(f"FFmpeg stderr: {result.stderr}")
             raise HTTPException(
                 status_code=400,
                 detail="Audio preprocessing failed. FFmpeg did not produce a valid WAV output."
             )
 
-        # Establish prompt context
-        prompt_text = initial_prompt.strip() if (initial_prompt and initial_prompt.strip()) else "ការសន្ទនាជាភាសាខ្មែរ។"
-        prompt_ids = processor.get_prompt_ids(prompt_text, return_tensors="pt").to(DEVICE)
-
-        # Apply generation config
-        model.generation_config.forced_decoder_ids = processor.get_decoder_prompt_ids(language="km", task="transcribe")
-        model.generation_config.num_beams = 5
-        model.generation_config.temperature = 0.0
-        model.generation_config.do_sample = False
-        # Strict repetition penalties can break natural Khmer repeating auxiliary tokens (like ការ, ភាព, ដដែលៗ)
-        # causing the model to break word-spelling rules, so we keep repetition_penalty at 1.0.
-        model.generation_config.repetition_penalty = 1.0
-
-        # Inference
-        # Read the WAV using librosa.load(path, sr=16000)
+        # Load enhanced audio samples using librosa
         audio, sample_rate = librosa.load(output_wav_path, sr=16000)
         duration_ms = int((len(audio) / sample_rate) * 1000)
 
-        # Pass it to processor and move to device
-        input_features = processor(audio, sampling_rate=16000, return_tensors="pt").input_features.to(DEVICE)
+        # Establish prompt context
+        prompt_text = initial_prompt.strip() if (initial_prompt and initial_prompt.strip()) else "ការសន្ទនាជាភាសាខ្មែរ។"
 
-        # Call model.generate
-        with torch.no_grad():
-            output_ids = model.generate(
-                input_features,
-                prompt_ids=prompt_ids
-            )
+        # Transcribe using faster-whisper under high-accuracy CPU parameters
+        segments, info = model.transcribe(
+            audio,
+            beam_size=5,
+            temperature=0.0,
+            patience=2.0,
+            length_penalty=1.0,
+            initial_prompt=prompt_text
+        )
 
-        # Decode with processor.batch_decode
-        transcription = processor.batch_decode(output_ids, skip_special_tokens=True)[0]
+        # Concatenate text from transcribed segments
+        transcription = "".join([segment.text for segment in segments])
 
-        # Post-processing:
-        # 1. Strip zero-width spaces (\u200b) everywhere
-        clean_text = re.sub(r'\u200b', '', transcription)
-        # 2. Strip whitespaces only between Khmer characters to prevent breaking English words in mixed conversations
-        clean_text = re.sub(r'(?<=[\u1780-\u17FF\u19E0-\u19FF])\s+(?=[\u1780-\u17FF\u19E0-\u19FF])', '', clean_text)
+        # Clean up and normalize the Khmer text
+        normalized_text = clean_and_normalize_khmer_text(transcription)
 
-        # Apply NFC Unicode normalization and strip
-        normalized_text = unicodedata.normalize("NFC", clean_text).strip()
-
-        # Debug log
-        print(f"[ASR] raw tokens: {output_ids}")
+        # Log transcription size to avoid stdout console encoding crashes
+        print(f"[ASR] transcription length: {len(normalized_text)} characters")
 
         return {
             "text": normalized_text,
@@ -160,7 +222,7 @@ async def transcribe(
         )
 
     finally:
-        # Delete both temp files to prevent disk leaks
+        # Guarantee removal of temporary files from disk
         if os.path.exists(input_path):
             try:
                 os.remove(input_path)
@@ -172,9 +234,5 @@ async def transcribe(
             except Exception as e:
                 print(f"Failed to delete temp output file: {e}")
 
-        # Clear GPU cache to prevent memory bottlenecks on large-v3 model
-        if torch.cuda.is_available():
-            try:
-                torch.cuda.empty_cache()
-            except Exception as e:
-                print(f"Failed to clear CUDA cache: {e}")
+        # Explicitly run garbage collection to reclaim memory immediately
+        gc.collect()

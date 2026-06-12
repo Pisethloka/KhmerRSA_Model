@@ -15,3 +15,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.tmp
+
+# Large Model weights
+backend/metythorn_whisper_large_v3_ct2/
+
