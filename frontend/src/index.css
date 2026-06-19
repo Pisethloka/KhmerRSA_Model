@@ -4,11 +4,12 @@
   --bg-color: #FAFAFA;
   --card-bg: #FFFFFF;
   --border-color: #E5E7EB;
-  --border-hover: #D1D5DB;
+  --border-hover: #C7D2FE; /* Soft Indigo 200 */
   --text-primary: #18181B; /* Zinc 900 */
   --text-secondary: #71717A; /* Zinc 500 */
-  --accent-color: #18181B;
-  --accent-hover: #27272A;
+  --accent-color: #4F46E5; /* Indigo 600 */
+  --accent-hover: #4338CA; /* Indigo 700 */
+  --accent-light: #EEF2FF; /* Indigo 50 */
   --record-color: #EF4444; /* Red 500 */
   --record-hover: #DC2626;
   --error-bg: #FEF2F2;
@@ -21,7 +22,7 @@
   --card-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.04), 
                  0 1px 3px rgba(0, 0, 0, 0.02), 
                  0 0 0 1px rgba(0, 0, 0, 0.04);
-  --button-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --button-shadow: 0 1px 2px rgba(79, 70, 229, 0.05);
   
   /* Transitions */
   --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
@@ -38,12 +39,12 @@
 body {
   font-family: var(--font-family-sans);
   background-color: var(--bg-color);
-  /* Faint, premium ambient glow (Stripe/Linear style) */
+  /* Premium radial gradients for ambient background colors */
   background-image: 
-    radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.035) 0px, transparent 50%),
-    radial-gradient(at 100% 0%, rgba(244, 63, 94, 0.03) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(236, 72, 153, 0.025) 0px, transparent 50%),
-    radial-gradient(at 0% 100%, rgba(14, 165, 233, 0.03) 0px, transparent 50%);
+    radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.04) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(244, 63, 94, 0.035) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(236, 72, 153, 0.03) 0px, transparent 50%),
+    radial-gradient(at 0% 100%, rgba(14, 165, 233, 0.035) 0px, transparent 50%);
   background-attachment: fixed;
   color: var(--text-primary);
   min-height: 100vh;
@@ -72,7 +73,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2.5rem;
-  border: 1px solid rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(99, 102, 241, 0.02);
   transition: transform var(--transition-normal), box-shadow var(--transition-normal);
 }
 
@@ -89,7 +90,10 @@ h1 {
   font-weight: 600;
   font-size: 2.25rem;
   letter-spacing: -0.03em;
-  color: var(--text-primary);
+  /* Dark Slate to Indigo premium text gradient */
+  background: linear-gradient(135deg, #18181B 65%, var(--accent-color) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .subtitle {
@@ -108,7 +112,7 @@ h1 {
   width: 100%;
 }
 
-/* Apple-style circular record button with spring scaling */
+/* Circular record button with soft colored hover */
 .record-btn {
   width: 80px;
   height: 80px;
@@ -127,8 +131,10 @@ h1 {
 
 .record-btn:hover {
   border-color: var(--border-hover);
-  background-color: #F9FAFB;
+  background-color: var(--accent-light);
+  color: var(--accent-color);
   transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.08);
 }
 
 .record-btn:active {
@@ -190,14 +196,14 @@ h1 {
 }
 
 .status-text.processing {
-  color: var(--text-primary);
+  color: var(--accent-color);
 }
 
 /* Minimal Spinner */
 .spinner {
   width: 24px;
   height: 24px;
-  border: 2px solid rgba(0, 0, 0, 0.06);
+  border: 2px solid rgba(99, 102, 241, 0.06);
   border-top-color: var(--accent-color);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -213,7 +219,7 @@ h1 {
   display: flex;
   align-items: center;
   text-align: center;
-  color: #D1D5DB;
+  color: #E5E7EB;
   font-size: 0.8rem;
   font-weight: 500;
   text-transform: uppercase;
@@ -242,7 +248,7 @@ h1 {
   text-transform: lowercase;
 }
 
-/* Notion-style Dropzone with spring hover effect */
+/* Dropzone with colored hover indicator */
 .dropzone {
   width: 100%;
   border: 1px dashed var(--border-color);
@@ -259,8 +265,8 @@ h1 {
 }
 
 .dropzone:hover, .dropzone.drag-active {
-  border-color: #9CA3AF;
-  background-color: #F4F4F5;
+  border-color: var(--accent-color);
+  background-color: var(--accent-light);
 }
 
 .dropzone svg {
@@ -271,7 +277,7 @@ h1 {
 }
 
 .dropzone:hover svg {
-  fill: var(--text-primary);
+  fill: var(--accent-color);
   transform: translateY(-2px) scale(1.05);
 }
 
@@ -279,6 +285,11 @@ h1 {
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--text-secondary);
+  transition: color var(--transition-fast);
+}
+
+.dropzone:hover p {
+  color: var(--accent-color);
 }
 
 .file-input {
@@ -313,7 +324,7 @@ h1 {
 }
 
 .selected-file-badge button:hover {
-  color: var(--text-primary);
+  color: var(--record-color);
 }
 
 .transcribe-btn {
@@ -326,7 +337,7 @@ h1 {
   cursor: pointer;
   font-size: 0.875rem;
   transition: background-color var(--transition-fast);
-  box-shadow: var(--button-shadow);
+  box-shadow: 0 4px 10px rgba(79, 70, 229, 0.15);
 }
 
 .transcribe-btn:hover {
@@ -380,7 +391,7 @@ h1 {
 
 .result-box:focus {
   border-color: #A1A1AA;
-  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.05);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.05); /* Soft Indigo outline on focus */
 }
 
 /* Toolbar Actions Row */
@@ -407,9 +418,9 @@ h1 {
 }
 
 .action-btn:hover {
-  color: var(--text-primary);
+  color: var(--accent-color);
   border-color: var(--border-hover);
-  background-color: #FAFAFA;
+  background-color: var(--accent-light);
 }
 
 .action-btn svg {
@@ -478,8 +489,8 @@ h1 {
 }
 
 .settings-toggle-btn:hover {
-  background-color: #F4F4F5;
-  color: var(--text-primary);
+  background-color: var(--accent-light);
+  color: var(--accent-color);
 }
 
 .settings-toggle-btn svg {
@@ -539,7 +550,7 @@ h1 {
 }
 
 .settings-content input:focus {
-  border-color: #9CA3AF;
+  border-color: var(--accent-color);
   background-color: #FFFFFF;
 }
 
