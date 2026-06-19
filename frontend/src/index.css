@@ -429,36 +429,120 @@ h1 {
   flex-grow: 1;
 }
 
-/* Subtle voice wave recording indicator */
-.wave-container {
+/* Notion-style Settings Container */
+.settings-container {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.settings-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 3px;
-  height: 20px;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  margin-left: -0.5rem;
+  transition: all var(--transition-fast);
 }
 
-.wave-bar {
-  width: 2px;
+.settings-toggle-btn:hover {
+  background-color: #F4F4F5;
+  color: var(--text-primary);
+}
+
+.settings-toggle-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  transition: transform var(--transition-fast);
+}
+
+.settings-toggle-btn svg.rotated {
+  transform: rotate(90deg);
+}
+
+/* Smooth height transition settings drawer */
+.settings-drawer {
+  width: 100%;
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--transition-normal);
+  overflow: hidden;
+}
+
+.settings-drawer.open {
+  grid-template-rows: 1fr;
+}
+
+.settings-content {
+  min-height: 0;
+  width: 100%;
+  padding: 0.25rem 0 0.5rem 0;
+}
+
+.settings-content input {
+  width: 100%;
+  background-color: #FAFAFA;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.6rem 0.85rem;
+  font-family: var(--font-family-sans);
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.settings-content input::placeholder {
+  color: #A1A1AA; /* Zinc 400 */
+}
+
+.settings-content input:focus {
+  border-color: #9CA3AF;
+  background-color: #FFFFFF;
+}
+
+/* Linear-style Volume Meter Bar */
+.volume-meter-container {
+  width: 100%;
+  max-width: 160px;
   height: 4px;
+  background-color: #F4F4F5;
+  border-radius: 99px;
+  overflow: hidden;
+  margin-top: 0.5rem;
+}
+
+.volume-meter-bar {
+  height: 100%;
   background-color: var(--record-color);
-  border-radius: 1px;
-  animation: bounce-wave 0.8s ease-in-out infinite alternate;
+  border-radius: 99px;
+  width: 0%;
+  opacity: 0.3;
+  transition: width 0.08s ease-out, opacity 0.08s ease-out;
 }
 
-.wave-bar:nth-child(2) { animation-delay: 0.1s; }
-.wave-bar:nth-child(3) { animation-delay: 0.2s; }
-.wave-bar:nth-child(4) { animation-delay: 0.3s; }
-.wave-bar:nth-child(5) { animation-delay: 0.4s; }
-.wave-bar:nth-child(6) { animation-delay: 0.3s; }
-.wave-bar:nth-child(7) { animation-delay: 0.2s; }
-.wave-bar:nth-child(8) { animation-delay: 0.1s; }
-
-@keyframes bounce-wave {
-  from {
-    height: 4px;
-  }
-  to {
-    height: 18px;
-  }
+/* ASR Quality Metadata Row */
+.metadata-row {
+  width: 100%;
+  text-align: center;
+  font-size: 0.775rem;
+  color: #A1A1AA; /* Zinc 400 */
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.4rem;
 }
+

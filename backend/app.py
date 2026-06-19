@@ -2,6 +2,7 @@ import io
 import os
 import re
 import time
+import math
 import subprocess
 import unicodedata
 import numpy as np
@@ -12,8 +13,8 @@ from faster_whisper import WhisperModel
 
 app = FastAPI(
     title="Khmer Automatic Speech Recognition (ASR) API",
-    description="ASR using metythorn/whisper-large-v3 with CTranslate2 backend (Optimized v3.0)",
-    version="3.0.0"
+    description="ASR using metythorn/whisper-large-v3 with CTranslate2 backend (Optimized v3.1)",
+    version="3.1.0"
 )
 
 # Enable CORS middleware
@@ -146,20 +147,16 @@ def health():
 @app.post("/transcribe")
 async def transcribe(
     file: UploadFile = File(...),
-    initial_prompt: str = Form(
-        "នេះគឺជាការបកប្រែសំឡេងភាសាខ្មែរសម្រាប់ប្រព័ន្ធស្វ័យប្រវត្តិ។ "
-        "សូមសរសេរឱ្យបានត្រឹមត្រូវតាមវេយ្យាករណ៍ មានសញ្ញាប្រយុត្តិគតិយុត្ត "
-        "និងបន្សែងពាក្យឱ្យបានត្រឹមត្រូវ។ "
-        "ប្រធានបទរួមមាន បច្ចេកវិទ្យា សេដ្ឋកិច្ច សង្គម សុខាភិបាល និងការអប់រំ។"
-    )
+    keywords: str = Form(None)
 ):
     """
     ASR transcription endpoint with:
     - Zero-I/O in-memory processing via FFmpeg piping directly to soundfile
     - FFmpeg signal enhancement (anlmdn with custom settings + loudnorm)
+    - Dynamic spelling hints prompt injection (keywords)
     - Silero VAD pre-filtering for speed and syllable preservation
-    - Anti-hallucination decoding parameters (repetition penalty, beam size=3, temperature fallback)
-    - Khmer language lock
+    - Segment-level average log probability confidence calculation
+    - Anti-hallucination decoding parameters
     """
     if model is None:
         raise HTTPException(status_code=500, detail="ASR Model is not loaded on the backend")
@@ -231,8 +228,12 @@ async def transcribe(
                 detail="Uploaded audio contains no playable audio data."
             )
 
-        # Establish prompt context
-        prompt_text = initial_prompt.strip() if (initial_prompt and initial_prompt.strip()) else "ការសន្ទនាជាភាសាខ្មែរ។"
+        # Construct dynamic prompt using spelling hints
+        base_prompt = "នេះគឺជាការបកប្រែសំឡេងភាសាខ្មែរសម្រាប់ប្រព័ន្ធស្វ័យប្រវត្តិ។ សូមសរសេរឱ្យបានត្រឹមត្រូវតាមវេយ្យាករណ៍ មានសញ្ញាប្រយុត្តិគតិយុត្ត និងបន្សែងពាក្យឱ្យបានត្រឹមត្រូវ។"
+        if keywords and keywords.strip():
+            prompt_text = f"{base_prompt} ពាក្យគន្លឹះ៖ {keywords.strip()}."
+        else:
+            prompt_text = base_prompt
 
         # Transcribe with maximum precision + speed optimizations
         segments, info = model.transcribe(
@@ -260,20 +261,30 @@ async def transcribe(
         transcription = "".join([segment.text for segment in segments_list])
         num_segments = len(segments_list)
 
+        # Calculate actual transcription confidence (exponential of averaged segment log probs)
+        if num_segments > 0:
+            avg_logprob = sum(seg.avg_logprob for seg in segments_list) / num_segments
+            avg_confidence = round(math.exp(avg_logprob) * 100)
+            avg_confidence = max(0, min(100, avg_confidence))
+        else:
+            avg_confidence = 100
+
         # Clean up and normalize the Khmer text
         normalized_text = clean_and_normalize_khmer_text(transcription)
 
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         # Log transcription stats safely
-        print(f"[ASR] {len(normalized_text)} chars | segments={num_segments} | audio={duration_ms}ms | processing={elapsed_ms}ms")
+        print(f"[ASR] {len(normalized_text)} chars | segments={num_segments} | confidence={avg_confidence}% | audio={duration_ms}ms | processing={elapsed_ms}ms")
 
         return {
             "text": normalized_text,
             "duration_ms": duration_ms,
             "processing_ms": elapsed_ms,
             "num_segments": num_segments,
-            "language_probability": round(info.language_probability, 3),
+            "confidence": avg_confidence,
+            "word_count": len(normalized_text.split()),
+            "char_count": len(normalized_text),
         }
 
     except Exception as e:
