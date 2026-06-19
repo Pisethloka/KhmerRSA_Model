@@ -3,7 +3,5 @@ uvicorn[standard]
 faster-whisper
 transformers>=4.38.0
 accelerate
-soundfile
-librosa
 python-multipart
 numpy
