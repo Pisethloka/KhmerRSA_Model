@@ -1,10 +1,7 @@
+import io
 import os
-import gc
 import re
-import uuid
-import shutil
 import time
-import tempfile
 import subprocess
 import unicodedata
 import numpy as np
@@ -15,8 +12,8 @@ from faster_whisper import WhisperModel
 
 app = FastAPI(
     title="Khmer Automatic Speech Recognition (ASR) API",
-    description="ASR using metythorn/whisper-large-v3 with CTranslate2 backend (Optimized)",
-    version="2.0.0"
+    description="ASR using metythorn/whisper-large-v3 with CTranslate2 backend (Optimized v3.0)",
+    version="3.0.0"
 )
 
 # Enable CORS middleware
@@ -47,10 +44,10 @@ PHONETIC_SLIP_DICT = {
     "កំពុត": "កំពត",
 }
 
-# Optimized CPU INT8 configuration
+# Optimized CPU INT8 configuration with dynamic threads
 DEVICE = "cpu"
 COMPUTE_TYPE = "int8"
-CPU_THREADS = 4
+CPU_THREADS = os.cpu_count() or 4
 LOCAL_CT2_PATH = "./metythorn_whisper_large_v3_ct2"
 
 model = None
@@ -147,79 +144,90 @@ def health():
 @app.post("/transcribe")
 async def transcribe(
     file: UploadFile = File(...),
-    initial_prompt: str = Form("ការសន្ទនាជាភាសាខ្មែរ។")
+    initial_prompt: str = Form(
+        "នេះគឺជាការបកប្រែសំឡេងភាសាខ្មែរសម្រាប់ប្រព័ន្ធស្វ័យប្រវត្តិ។ "
+        "សូមសរសេរឱ្យបានត្រឹមត្រូវតាមវេយ្យាករណ៍ មានសញ្ញាប្រយុត្តិគតិយុត្ត "
+        "និងបន្សែងពាក្យឱ្យបានត្រឹមត្រូវ។ "
+        "ប្រធានបទរួមមាន បច្ចេកវិទ្យា សេដ្ឋកិច្ច សង្គម សុខាភិបាល និងការអប់រំ។"
+    )
 ):
     """
     ASR transcription endpoint with:
-    - FFmpeg signal enhancement (anlmdn + loudnorm)
-    - Silero VAD pre-filtering for speed
-    - Anti-hallucination decoding parameters
+    - Zero-I/O in-memory processing via FFmpeg piping directly to soundfile
+    - FFmpeg signal enhancement (anlmdn with custom settings + loudnorm)
+    - Silero VAD pre-filtering for speed and syllable preservation
+    - Anti-hallucination decoding parameters (repetition penalty, beam size=3, temperature fallback)
     - Khmer language lock
-    - Aggressive resource cleanup
     """
     if model is None:
         raise HTTPException(status_code=500, detail="ASR Model is not loaded on the backend")
 
     start_time = time.time()
 
-    # Generate unique paths for temporary files
-    input_suffix = os.path.splitext(file.filename)[1] if file.filename else ".tmp"
-    if not input_suffix:
-        input_suffix = ".tmp"
-
-    temp_dir = tempfile.gettempdir()
-    unique_id = uuid.uuid4().hex
-    input_path = os.path.join(temp_dir, f"input_{unique_id}{input_suffix}")
-    output_wav_path = os.path.join(temp_dir, f"output_{unique_id}.wav")
-
     try:
-        # Write the uploaded file to disk
-        with open(input_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # Read the raw uploaded bytes directly into memory
+        raw_audio_bytes = await file.read()
+        if not raw_audio_bytes:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-        # Transcode audio using FFmpeg with signal enhancement filters (16kHz mono PCM)
-        # anlmdn = noise reduction, loudnorm = volume normalization
+        # Transcode audio in-memory using FFmpeg (from pipe:0 to pipe:1)
+        # anlmdn=s=7 (denoising with strength 7), loudnorm (loudness normalization)
+        # Output is 16kHz mono PCM WAV
         command = [
             "ffmpeg", "-y",
-            "-i", input_path,
-            "-af", "anlmdn,loudnorm",
+            "-i", "pipe:0",
+            "-af", "anlmdn=s=7,loudnorm",
             "-ar", "16000",
             "-ac", "1",
             "-c:a", "pcm_s16le",
-            output_wav_path
+            "-f", "wav",
+            "pipe:1"
         ]
 
         try:
-            subprocess.run(
+            process = subprocess.Popen(
                 command,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True
+                stderr=subprocess.PIPE
             )
-        except subprocess.CalledProcessError as e:
-            print(f"FFmpeg failed with exit code {e.returncode}")
-            print(f"FFmpeg stderr: {e.stderr}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Audio transcoding failed: {e.stderr.strip()}"
-            )
+            wav_bytes, stderr_bytes = process.communicate(input=raw_audio_bytes)
         except FileNotFoundError:
             raise HTTPException(
                 status_code=500,
                 detail="FFmpeg executable not found on the system path."
             )
 
-        # Confirm transcoded file was created and is not empty
-        if not os.path.exists(output_wav_path) or os.path.getsize(output_wav_path) == 0:
+        if process.returncode != 0:
+            stderr_text = stderr_bytes.decode("utf-8", errors="ignore")
+            print(f"FFmpeg failed with exit code {process.returncode}")
+            print(f"FFmpeg stderr: {stderr_text}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Audio transcoding failed: {stderr_text.strip()}"
+            )
+
+        if not wav_bytes:
             raise HTTPException(
                 status_code=400,
                 detail="Audio preprocessing failed. FFmpeg did not produce a valid WAV output."
             )
 
-        # Load enhanced audio directly using soundfile (lightweight, no librosa overhead)
-        audio, sample_rate = sf.read(output_wav_path, dtype="float32")
+        # Load enhanced audio directly from memory using soundfile
+        try:
+            audio, sample_rate = sf.read(io.BytesIO(wav_bytes), dtype="float32")
+        except Exception as sf_err:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to decode audio bytes: {str(sf_err)}"
+            )
+
         duration_ms = int((len(audio) / sample_rate) * 1000)
+        if duration_ms == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded audio contains no playable audio data."
+            )
 
         # Establish prompt context
         prompt_text = initial_prompt.strip() if (initial_prompt and initial_prompt.strip()) else "ការសន្ទនាជាភាសាខ្មែរ។"
@@ -228,15 +236,15 @@ async def transcribe(
         segments, info = model.transcribe(
             audio,
             language="km",                      # Lock to Khmer — skip auto-detection
-            beam_size=5,
-            temperature=0.0,
-            patience=2.0,
+            beam_size=3,                        # High-accuracy beam search, balanced with speed
+            temperature=[0.0, 0.2],             # Greedy decoding with temperature fallback if low confidence
+            patience=1.5,                       # Reduced patient search for speed
             length_penalty=1.0,
             initial_prompt=prompt_text,
             condition_on_previous_text=False,    # Prevent hallucination feedback loops
             no_speech_threshold=0.6,             # Aggressively filter silent segments
             log_prob_threshold=-0.5,             # Discard low-confidence gibberish
-            repetition_penalty=1.1,              # Penalize repeated words/phrases
+            repetition_penalty=1.15,             # Stronger repetition loop prevention
             vad_filter=True,                     # Enable Silero VAD
             vad_parameters=dict(
                 threshold=0.6,                   # Higher = more selective speech detection
@@ -245,21 +253,25 @@ async def transcribe(
             ),
         )
 
-        # Concatenate text from transcribed segments
-        transcription = "".join([segment.text for segment in segments])
+        # Iterate and concatenate text from transcribed segments, keeping count
+        segments_list = list(segments)
+        transcription = "".join([segment.text for segment in segments_list])
+        num_segments = len(segments_list)
 
         # Clean up and normalize the Khmer text
         normalized_text = clean_and_normalize_khmer_text(transcription)
 
         elapsed_ms = int((time.time() - start_time) * 1000)
 
-        # Log transcription stats (safe for non-UTF-8 consoles)
-        print(f"[ASR] {len(normalized_text)} chars | audio={duration_ms}ms | processing={elapsed_ms}ms")
+        # Log transcription stats safely
+        print(f"[ASR] {len(normalized_text)} chars | segments={num_segments} | audio={duration_ms}ms | processing={elapsed_ms}ms")
 
         return {
             "text": normalized_text,
             "duration_ms": duration_ms,
             "processing_ms": elapsed_ms,
+            "num_segments": num_segments,
+            "language_probability": round(info.language_probability, 3),
         }
 
     except Exception as e:
@@ -270,19 +282,3 @@ async def transcribe(
             status_code=500,
             detail=f"Internal Server Error: {str(e)}"
         )
-
-    finally:
-        # Guarantee removal of temporary files from disk
-        if os.path.exists(input_path):
-            try:
-                os.remove(input_path)
-            except Exception as e:
-                print(f"Failed to delete temp input file: {e}")
-        if os.path.exists(output_wav_path):
-            try:
-                os.remove(output_wav_path)
-            except Exception as e:
-                print(f"Failed to delete temp output file: {e}")
-
-        # Explicitly run garbage collection to reclaim memory immediately
-        gc.collect()
