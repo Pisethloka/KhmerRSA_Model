@@ -42,6 +42,8 @@ PHONETIC_SLIP_DICT = {
     "សំរាប់": "សម្រាប់",
     "បន្ថែន": "បន្ថែម",
     "កំពុត": "កំពត",
+    "សូមស្វាគម": "សូមស្វាគមន៍",
+    "បំលែង": "បំប្លែង",
 }
 
 # Optimized CPU INT8 configuration with dynamic threads
